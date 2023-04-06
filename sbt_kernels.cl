@@ -1,16 +1,3 @@
-#define SERIAL_COORD(i, j, N) ((i)*N + (j))
-
-void print_board(int *board, int N) {
-  int i, j;
-  for (i = 0; i < N; ++i) {
-    for (j = 0; j < N; ++j) {
-      printf("%d ", board[SERIAL_COORD(i, j, N)]);
-    }
-    printf("\n");
-  }
-  printf("\n");
-}
-
 int check_partial_board_d(int *board, int n, int p, int num) {
   int j;
   int N = n * n;
@@ -45,18 +32,14 @@ kernel void backtrack_kernel(global int *boards, global int *ans_found, int n,
   int slot_size = N * N;
 
   int i;
-  //   if (g_id == 0)
-  //     printf("slot_size * slots: %d\n", slot_size * l_size);
-  //   for (i = 0; i < slot_size * l_size; i += l_size) {
-  //     printf("[%2d:%2d:%2d]: (%d) %d -> %d\n", g_id, l_id, group, i, g_id +
-  //     i,
-  //            l_id + i);
-  //     shared_boards[l_id + i] = boards[g_id + i];
-  //   }
-  //   barrier(CLK_LOCAL_MEM_FENCE);
-
-  for (i = 0; i < N * N; ++i)
-    shared_boards[i + l_id * slot_size] = boards[g_id * slot_size + i];
+  // if (g_id == 0)
+  //   printf("slot_size * slots: %d\n", slot_size * l_size);
+  for (i = 0; i < slot_size * l_size; i += l_size) {
+    // printf("[%2d:%2d:%2d]: (%d) %d -> %d\n", g_id, l_id, group, i, g_id + i,
+    //        l_id + i);
+    shared_boards[l_id + i] = boards[g_id + i];
+  }
+  barrier(CLK_LOCAL_MEM_FENCE);
 
   int *board = shared_boards + l_id * slot_size;
   int *stack = stacks + l_id * slot_size;
