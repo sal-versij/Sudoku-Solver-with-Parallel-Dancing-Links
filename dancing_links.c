@@ -316,7 +316,15 @@ int convert_matrix(const int *board, int **valid_candidates, int placed, int n, 
     int N = n * n, i, j;
     int total = N * N;
     // first compute the number of 1
-    int elements_count = placed + N * (total - placed);
+    int elements_count = placed;
+
+    for (i = 0; i < N * N; ++ i) {
+        for(j = 0; j < N; ++ j){
+            if(valid_candidates[i][j]) {
+                ++elements_count;
+            }
+        }
+    }
 
     *cols_ptr = (int *) malloc(sizeof(int) * elements_count * 4);
     *rows_ptr = (int *) malloc(sizeof(int) * elements_count * 4);

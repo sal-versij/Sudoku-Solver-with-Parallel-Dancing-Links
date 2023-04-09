@@ -89,7 +89,7 @@ kernel void exact_cover_kernel(global int *dlxs, global const int *dlx_props,
           // copy answer to global memory
 
           answer_found[1] = top;
-          printf("answer: %d (%d)\n", answer_found[0], answer_found[1]);
+          // printf("answer: %d (%d)\n", answer_found[0], answer_found[1]);
 
           for (int i = 0; i < top; ++i) {
             answer[i] = stack[i];
