@@ -188,10 +188,12 @@ cl_program create_program(const char *const fname, cl_context ctx,
     errlog = clGetProgramBuildInfo(prg, dev, CL_PROGRAM_BUILD_LOG,
                                    0, NULL, &logsize);
     ocl_check(errlog, "get program build log size");
+
     log_buf = malloc(logsize);
     errlog = clGetProgramBuildInfo(prg, dev, CL_PROGRAM_BUILD_LOG,
                                    logsize, log_buf, NULL);
     ocl_check(errlog, "get program build log");
+
     while (logsize > 0 &&
            (log_buf[logsize - 1] == '\n' ||
             log_buf[logsize - 1] == '\0')) {
