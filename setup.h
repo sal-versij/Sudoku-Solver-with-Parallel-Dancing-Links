@@ -413,6 +413,45 @@ struct MemoryString memory_string(size_t bytes) {
 }
 
 struct Task {
-    double runtime;
+    int completed;
+    int size;
+    int lws;
+    int tasks;
+    size_t write_answer_data_byte;
+    cl_ulong write_answer_data_nanoseconds;
+    size_t write_tasks_byte;
+    cl_ulong write_tasks_nanoseconds;
+    size_t write_dlx_byte;
+    cl_ulong write_dlx_nanoseconds;
+    size_t write_dlx_props_byte;
+    cl_ulong write_dlx_props_nanoseconds;
+    size_t write_dlxs_byte;
+    cl_ulong kernel_nanoseconds;
+    size_t read_answer_found_byte;
+    cl_ulong read_answer_found_nanoseconds;
+    size_t read_answer_byte;
+    cl_ulong read_answer_nanoseconds;
 };
 
+void write_task_to_csv(FILE *csv, struct Task task) {
+    fprintf(csv, "%s;%d;%d;%d;%zu;%llu;%zu;%llu;%zu;%llu;%zu;%llu;%zu;%llu;%zu;%llu;%zu;%llu\n",
+            task.completed ? "TRUE" : "FALSE",
+            task.size,
+            task.lws,
+            task.tasks,
+            task.write_answer_data_byte,
+            task.write_answer_data_nanoseconds,
+            task.write_tasks_byte,
+            task.write_tasks_nanoseconds,
+            task.write_dlx_byte,
+            task.write_dlx_nanoseconds,
+            task.write_dlx_props_byte,
+            task.write_dlx_props_nanoseconds,
+            task.write_dlxs_byte,
+            task.kernel_nanoseconds,
+            task.read_answer_found_byte,
+            task.read_answer_found_nanoseconds,
+            task.read_answer_byte,
+            task.read_answer_nanoseconds
+    );
+}

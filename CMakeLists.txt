@@ -18,3 +18,7 @@ target_link_libraries(dlx_serial ${OpenCL_LIBRARY})
 add_executable(dlx_parallel dancing_links_parallel.c)
 target_include_directories(dlx_parallel PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(dlx_parallel ${OpenCL_LIBRARY})
+
+add_executable(dlx_parallel_2 dancing_links_parallel_2.c)
+target_include_directories(dlx_parallel_2 PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(dlx_parallel_2 ${OpenCL_LIBRARY})

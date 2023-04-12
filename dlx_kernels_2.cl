@@ -50,12 +50,14 @@ void restore_column_d(int id, __global int *dlx, int dlx_size) {
   }
 }
 
-kernel void exact_cover_kernel(global int *dlxs, global const int *dlx_props,
+kernel void exact_cover_kernel(global int *tasks, global int *_dlx,
+                               global int *dlxs, global const int *dlx_props,
                                global int *answer, global int *answer_found,
                                int dlx_size, int N, int task_count,
                                local int *stacks) {
   int l_id = get_local_id(0);
   int g_id = get_global_id(0);
+  int l_size = get_local_size(0);
 
   // printf("[%d:%d] starting! answer found: %d (%d)\n", g_id, l_id,
   //        answer_found[0], answer_found[1]);
@@ -68,12 +70,24 @@ kernel void exact_cover_kernel(global int *dlxs, global const int *dlx_props,
   __global int *up, *down, *left, *right;
   __global int *dlx = dlxs + g_id * dlx_size * 4;
   __local int *stack = stacks + l_id * N * N;
+
+  for (int i = 0; i < dlx_size * 4; ++i) {
+    dlx[i] = _dlx[i];
+  }
+  barrier(CLK_LOCAL_MEM_FENCE);
+
   UNLOAD(dlx, dlx_size);
+
+  int first_row = tasks[g_id];
+
+  remove_column_d(col[first_row], dlx, dlx_size);
+  for (int elem = right[first_row]; elem != first_row; elem = right[elem])
+    remove_column_d(col[elem], dlx, dlx_size);
 
   int top = 0;
   int last_op = 0; // 0 - push stack, 1 - pop stack
   int c_col, c_row;
-
+  // printf("[%d:%d] Starting to search", g_id, l_id);
   while (*answer_found == -1) {
     // printf("[%d:%d] top: %d, last_op: %d, right[0]:%d\n", g_id, l_id, top,
     //        last_op, right[0]);
