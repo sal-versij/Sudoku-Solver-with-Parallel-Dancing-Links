@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <windows.h>
 
 #define CL_TARGET_OPENCL_VERSION 120
 
@@ -30,8 +31,8 @@ int main(int argc, char *argv[]) {
     const int N = n * n;
     const int lws = atoi(argv[2]);
 
-    printf("Sudoku loaded: %d x %d\n", N, N);
-    print_board(board, N);
+//    printf("Sudoku loaded: %d x %d\n", N, N);
+//    print_board(board, N);
 
     solve(board, n);
 
@@ -44,7 +45,7 @@ void solve(const int *board, int n) {
     struct MemoryString memory;
 
     //region Initialize dlx
-    printf("Initializing dlx...\n");
+//    printf("Initializing dlx...\n");
     int *col_ids, *row_ids, *convert_table;
     int *dlx;
     int placed;
@@ -61,16 +62,27 @@ void solve(const int *board, int n) {
 
     memory = memory_string(dlx_size * 4 * sizeof(int));
 
-    printf("Number of nodes in dancing links: %d (~%llu %s)\n", dlx_size,
-           memory.value, memory.unit);
+//    printf("Number of nodes in dancing links: %d (~%llu %s)\n", dlx_size,
+//           memory.value, memory.unit);
     //endregion
 
     //region Search
     int *answer = malloc(N * N * sizeof(int));
+
+
+    LARGE_INTEGER frequency, start_time, end_time;
+    double time_elapsed;
+    QueryPerformanceFrequency(&frequency);
+    double micro_frequency = (double) frequency.QuadPart / 1000000;
+    QueryPerformanceCounter(&start_time);
     int answer_length = exact_cover(dlx, dlx_props, answer, dlx_size, N);
+    QueryPerformanceCounter(&end_time);
+    double elapsed = (double) (end_time.QuadPart - start_time.QuadPart) / micro_frequency;
+
+    printf("Search took %f\n", elapsed);
 
     for (int i = 0; i < answer_length; ++i) answer[i] = dlx_props[answer[i] + dlx_size]; // convert to row numbers
-    convert_answer_print_serial(answer, convert_table, N);
+//    convert_answer_print_serial(answer, convert_table, N);
 
     free(answer);
     //endregion

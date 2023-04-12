@@ -7,17 +7,17 @@
 #include "setup.h"
 
 cl_event
-execute_exact_cover_kernel(cl_command_queue q, cl_kernel k, size_t task_count, size_t lws, cl_int n, cl_mem d_dlxs,
-                           cl_mem d_dlx_props, cl_int dlx_size, cl_mem d_ans, cl_mem d_ans_found, cl_event *waitingList,
-                           int waitingListSize);
+execute_exact_cover_kernel(cl_command_queue q, cl_kernel k, size_t task_count, size_t lws, cl_int n, cl_mem d_tasks,
+                           cl_mem d_dlx, cl_mem d_dlxs, cl_mem d_dlx_props, cl_int dlx_size, cl_mem d_ans,
+                           cl_mem d_ans_found, cl_event *waitingList, int waitingListSize);
 
-int permutate_tasks(const int *dlx, int dlx_size, int n, int *dlxs, int *answers, int slots);
+int permutate_tasks(const int *dlx, int dlx_size, int *tasks, int i);
 
-void solve(const int *board, int n, int lws);
+struct Task solve(const int *board, int n, int lws);
 
 int main(int argc, char *argv[]) {
-    if (argc != 3) {
-        fprintf(stderr, "Usage: %s <sudoku> <tile_size>\n", argv[0]);
+    if (argc < 3 || argc > 4) {
+        fprintf(stderr, "Usage: %s <sudoku> <tile_size> [csv]\n", argv[0]);
         return 1;
     }
 
@@ -26,19 +26,30 @@ int main(int argc, char *argv[]) {
 
     const int N = n * n;
     const int lws = atoi(argv[2]);
+    const char *csv = argc == 4 ? argv[3] : "";
 
     printf("Sudoku loaded: %d x %d\n", N, N);
     print_board(board, N);
 
-    solve(board, n, lws);
+    struct Task task = solve(board, n, lws);
+
+    if (*csv != 0) {
+        FILE *csv_file = fopen(csv, "a");
+        write_task_to_csv(csv_file, task);
+        fclose(csv_file);
+    }
 
     free(board);
     return 0;
 }
 
-void solve(const int *board, int n, int lws) {
+struct Task solve(const int *board, int n, int lws) {
+    struct Task task = {0};
     int N = n * n;
     struct MemoryString memory;
+
+    task.size = N;
+    task.lws = lws;
 
     //region Initialize dlx
     printf("Initializing dlx...\n");
@@ -55,6 +66,7 @@ void solve(const int *board, int n, int lws) {
     int num_elems = convert_matrix(board, valid_candidates, placed, n, &col_ids, &row_ids, &convert_table);
     int dlx_size = build_dancing_links(col_ids, row_ids, num_elems, &dlx);
     int *dlx_props = dlx + 4 * dlx_size;
+    int *row = dlx_props + dlx_size;
 
     memory = memory_string(dlx_size * 4 * sizeof(int));
 
@@ -66,33 +78,35 @@ void solve(const int *board, int n, int lws) {
     int estimated_tasks_count = dlx_size - N * N - 1;
 
     memory = memory_string(dlx_size * 4 * estimated_tasks_count * sizeof(int));
-
     printf("Generating %d tasks (taking ~%llu %s of memory)...\n", estimated_tasks_count, memory.value, memory.unit);
 
-    int *dlxs = (int *) malloc(dlx_size * 4 * estimated_tasks_count * sizeof(int));
-    int *answers = (int *) malloc(sizeof(int) * estimated_tasks_count);
+    int *tasks = (int *) malloc(estimated_tasks_count * sizeof(int));
 
-    int c_tasks_count = permutate_tasks(dlx, dlx_size, n, dlxs, answers, estimated_tasks_count);
+    int c_tasks_count = permutate_tasks(dlx, dlx_size, tasks, estimated_tasks_count);
+    task.tasks = c_tasks_count;
     if (c_tasks_count > estimated_tasks_count) {
         fprintf(stderr, "Too many tasks generated: %d > %d\n", c_tasks_count, estimated_tasks_count);
-        return;
+        return task;
     }
     if (c_tasks_count < 0) {
         fprintf(stderr, "Unknown error: Alredy solved?.\n");
-        return;
+        return task;
     }
 
     for (int i = 0; i < c_tasks_count; ++i) {
-        if (convert_table[answers[i]] / N > N * N) {
-            fprintf(stderr, "Invalid task %d: %d -> %d (%d: %d)\n",
-                    i, answers[i], convert_table[answers[i]], convert_table[answers[i]] / N,
-                    convert_table[answers[i]] % N + 1);
+        int r = row[tasks[i]];
 
-            return;
+        if (convert_table[r] / N > N * N) {
+            fprintf(stderr, "Invalid task %d: %d -> %d (%d: %d)\n",
+                    i, r, convert_table[r], convert_table[r] / N,
+                    convert_table[r] % N + 1);
+
+            return task;
         }
     }
 
-    printf("Tasks generated.\n");
+    memory = memory_string(dlx_size * 4 * c_tasks_count * sizeof(int));
+    printf("%d tasks generated (taking ~%llu %s of memory).\n", c_tasks_count, memory.value, memory.unit);
     //endregion
 
     //region GPU Search
@@ -107,87 +121,161 @@ void solve(const int *board, int n, int lws) {
 
     struct Info info = initialize("dlx_kernels.cl", "exact_cover_kernel");
 
-    cl_mem d_dlxs = clCreateBuffer(info.context, CL_MEM_READ_WRITE | CL_MEM_HOST_WRITE_ONLY,
-                                   dlx_size * 4 * c_tasks_count * sizeof(int), NULL, &err);
-    ocl_check(err, "create buffer for dlxs");
+    cl_mem d_tasks = clCreateBuffer(info.context, CL_MEM_READ_WRITE | CL_MEM_HOST_WRITE_ONLY | CL_MEM_USE_HOST_PTR,
+                                    c_tasks_count * sizeof(int), tasks, &err);
+    ocl_check(err, "create buffer for tasks");
+
+    cl_mem d_dlx = clCreateBuffer(info.context, CL_MEM_READ_WRITE | CL_MEM_HOST_WRITE_ONLY | CL_MEM_USE_HOST_PTR,
+                                  dlx_size * 4 * sizeof(int), dlx, &err);
+    ocl_check(err, "create buffer for dlx");
 
     cl_mem d_dlx_props = clCreateBuffer(info.context,
-                                        CL_MEM_READ_ONLY | CL_MEM_HOST_WRITE_ONLY,
-                                        dlx_size * 2 * sizeof(int), NULL, &err);
+                                        CL_MEM_READ_ONLY | CL_MEM_HOST_WRITE_ONLY | CL_MEM_USE_HOST_PTR,
+                                        dlx_size * 2 * sizeof(int), dlx_props, &err);
     ocl_check(err, "create buffer for dlx_props");
+
+    cl_mem d_answer_data = clCreateBuffer(info.context,
+                                          CL_MEM_READ_WRITE | CL_MEM_USE_HOST_PTR,
+                                          sizeof(int) * 2, answer_data, &err);
+    ocl_check(err, "create buffer for answer_data");
 
     cl_mem d_answer = clCreateBuffer(info.context, CL_MEM_WRITE_ONLY | CL_MEM_HOST_READ_ONLY,
                                      N * N * sizeof(int),
                                      NULL, &err);
-    ocl_check(err, "create buffer for ans");
+    ocl_check(err, "create buffer for answer");
 
-    cl_mem d_answer_data = clCreateBuffer(info.context,
-                                          CL_MEM_READ_WRITE,
-                                          sizeof(int) * 2, NULL, &err);
-    ocl_check(err, "create buffer for ans_found");
+    cl_mem d_dlxs = clCreateBuffer(info.context, CL_MEM_READ_WRITE | CL_MEM_HOST_NO_ACCESS,
+                                   dlx_size * 4 * c_tasks_count * sizeof(int), NULL, &err);
+    ocl_check(err, "create buffer for dlxs");
+
+    task.write_answer_data_byte = sizeof(int) * 2;
+    task.write_tasks_byte = c_tasks_count * sizeof(int);
+    task.write_dlx_byte = dlx_size * 4 * sizeof(int);
+    task.write_dlx_props_byte = dlx_size * 2 * sizeof(int);
+    task.write_dlxs_byte = dlx_size * 4 * c_tasks_count * sizeof(int);
+
+    memory = memory_string(c_tasks_count * sizeof(int));
+    printf("Device buffer tasks size: %d (%llu %s)\n", c_tasks_count, memory.value, memory.unit);
+
+    memory = memory_string(dlx_size * 4 * sizeof(int));
+    printf("Device buffer dlx size: %d (%llu %s)\n", dlx_size * 4, memory.value, memory.unit);
 
     memory = memory_string(dlx_size * 4 * c_tasks_count * sizeof(int));
     printf("Device buffer dlxs size: %d (%llu %s)\n", dlx_size * 4 * c_tasks_count, memory.value, memory.unit);
+
     memory = memory_string(dlx_size * 2 * sizeof(int));
     printf("Device buffer dlx_props size: %d (%llu %s)\n", dlx_size * 2, memory.value, memory.unit);
+
     memory = memory_string(N * N * sizeof(int));
     printf("Device buffer answer size: %d (%llu %s)\n", N * N, memory.value, memory.unit);
+
     memory = memory_string(sizeof(int) * 2);
     printf("Device buffer answer_data size: %d (%llu %s)\n", 2, memory.value, memory.unit);
+
     //endregion
 
     //region Write data to device
-    cl_event evt_writes[3];
-    err = clEnqueueWriteBuffer(info.queue, d_answer_data,
-                               CL_FALSE, 0, sizeof(int) * 2, answer_data,
-                               0, NULL, &evt_writes[0]);
-    ocl_check(err, "write answer_data");
+    cl_event evt_maps[4];
+    cl_event evt_unmaps[4];
 
-    err = clEnqueueWriteBuffer(info.queue, d_dlxs,
-                               CL_FALSE, 0, dlx_size * 4 * c_tasks_count * sizeof(int), dlxs,
-                               0, NULL, &evt_writes[1]);
-    ocl_check(err, "write dlxs");
+    clEnqueueMapBuffer(info.queue, d_answer_data,
+                       CL_FALSE, CL_MAP_WRITE, 0, sizeof(int) * 2,
+                       0, NULL, &evt_maps[0], &err);
+    ocl_check(err, "map answer_data");
 
-    err = clEnqueueWriteBuffer(info.queue, d_dlx_props,
-                               CL_FALSE, 0, dlx_size * 2 * sizeof(int), dlx_props,
-                               0, NULL, &evt_writes[2]);
-    ocl_check(err, "write dlx_props");
+    clEnqueueMapBuffer(info.queue, d_tasks,
+                       CL_FALSE, CL_MAP_WRITE, 0, c_tasks_count * sizeof(int),
+                       0, NULL, &evt_maps[1], &err);
+    ocl_check(err, "map tasks");
+
+    clEnqueueMapBuffer(info.queue, d_dlx,
+                       CL_FALSE, CL_MAP_WRITE, 0, dlx_size * 4 * sizeof(int),
+                       0, NULL, &evt_maps[2], &err);
+    ocl_check(err, "map dlx");
+
+    clEnqueueMapBuffer(info.queue, d_dlx_props,
+                       CL_FALSE, CL_MAP_WRITE, 0, dlx_size * 2 * sizeof(int),
+                       0, NULL, &evt_maps[3], &err);
+    ocl_check(err, "map dlx_props");
+
+    // Unmapping data
+
+    err = clEnqueueUnmapMemObject(info.queue, d_answer_data, answer_data,
+                                  1, &evt_maps[0], &evt_unmaps[0]);
+    ocl_check(err, "unmap answer_data");
+
+    err = clEnqueueUnmapMemObject(info.queue, d_tasks, tasks,
+                                  1, &evt_maps[1], &evt_unmaps[1]);
+    ocl_check(err, "unmap tasks");
+
+    err = clEnqueueUnmapMemObject(info.queue, d_dlx, dlx,
+                                  1, &evt_maps[2], &evt_unmaps[2]);
+    ocl_check(err, "unmap dlx");
+
+    err = clEnqueueUnmapMemObject(info.queue, d_dlx_props, dlx_props,
+                                  1, &evt_maps[3], &evt_unmaps[3]);
+    ocl_check(err, "unmap dlx_props");
     //endregion
+
+    // print dlx
+    // printf("Host DLX (%d):\n", dlx_size);
+    // for (int i = 0; i < dlx_size; ++i) {
+    //     printf("%d: u%d d%d l%d r%d\n", i, dlx[i], dlx[i + dlx_size], dlx[i + dlx_size * 2], dlx[i + dlx_size * 3]);
+    // }
 
     cl_event kernel_evt = execute_exact_cover_kernel(
             info.queue, info.kernel,
             c_tasks_count, lws, n,
-            d_dlxs, d_dlx_props, dlx_size, d_answer, d_answer_data,
-            evt_writes, 3);
+            d_tasks, d_dlx, d_dlxs, d_dlx_props,
+            dlx_size, d_answer, d_answer_data,
+            evt_unmaps, 4);
 
     //region Read answer
 
     cl_event read_answer_found_evt;
-    err = clEnqueueReadBuffer(info.queue, d_answer_data,
-                              CL_TRUE, 0, 2 * sizeof(int), answer_data,
-                              1, &kernel_evt, &read_answer_found_evt);
+    clEnqueueMapBuffer(info.queue, d_answer_data,
+                       CL_TRUE, CL_MAP_READ, 0, sizeof(int) * 2,
+                       1, &kernel_evt, &read_answer_found_evt, &err);
     ocl_check(err, "read answer_data");
+
+    task.read_answer_found_byte = sizeof(int) * 2;
 
     printf("GPU search finished.\n");
 
     int answer_found = answer_data[0];
     int answer_length = answer_data[1];
 
+    clEnqueueUnmapMemObject(info.queue, d_answer_data, answer_data,
+                            1, &read_answer_found_evt, NULL);
+
     if (answer_found && answer_length > 0) {
-        int *answer = (int *) malloc(N * N * sizeof(int));
         cl_event read_answer_evt;
-        err = clEnqueueReadBuffer(info.queue, d_answer,
-                                  CL_TRUE, 0, N * N * sizeof(int), answer,
-                                  1, &read_answer_found_evt, &read_answer_evt);
+        int *answer = clEnqueueMapBuffer(info.queue, d_answer,
+                                         CL_TRUE, CL_MAP_READ, 0, N * N * sizeof(int),
+                                         1, &kernel_evt, &read_answer_evt, &err);
         ocl_check(err, "read answer");
 
-        for (int i = 0; i < answer_length; ++i) answer[i] = dlx_props[answer[i] + dlx_size]; // convert to row numbers
-        convert_answer_print(answers[answer_found], answer, convert_table, N);
+        task.read_answer_byte = N * N * sizeof(int);
+        task.read_answer_nanoseconds = runtime_ns(read_answer_evt);
 
-        free(answer);
+        for (int i = 0; i < answer_length; ++i)
+            answer[i] = row[answer[i]]; // convert to row numbers
+        convert_answer_print(row[tasks[answer_found]], answer, convert_table, N
+        );
+
+        clEnqueueUnmapMemObject(info.queue, d_answer, answer,
+                                1, &read_answer_evt, NULL);
+    } else {
+        printf("No answer found.\n");
     }
     //endregion
-    //endregion
+
+    task.write_answer_data_nanoseconds = runtime_ns(evt_maps[0]);
+    task.write_tasks_nanoseconds = runtime_ns(evt_maps[1]);
+    task.write_dlx_nanoseconds = runtime_ns(evt_maps[2]);
+    task.write_dlx_props_nanoseconds = runtime_ns(evt_maps[3]);
+    task.kernel_nanoseconds = runtime_ns(kernel_evt);
+    task.read_answer_found_nanoseconds = runtime_ns(read_answer_found_evt);
 
     //region Free memory
     freeInfo(info);
@@ -196,22 +284,25 @@ void solve(const int *board, int n, int lws) {
     clReleaseMemObject(d_dlx_props);
     clReleaseMemObject(d_answer_data);
 
-    free(dlxs);
+    free(tasks);
     free(dlx);
     free(convert_table);
     free(col_ids);
     free(row_ids);
     free(answer_data);
-    for (int i = 0; i < N * N; ++i) free(valid_candidates[i]);
+    for (int i = 0; i < N * N; ++i)
+        free(valid_candidates[i]);
     free(valid_candidates);
     //endregion
+
+    task.completed = 1;
+
+    return task;
 }
 
-int permutate_tasks(const int *dlx, int dlx_size, int n, int *dlxs, int *answers, int slots) {
+int permutate_tasks(const int *dlx, int dlx_size, int *tasks, int tasks_size) {
     const int *b_down = dlx + 1 * dlx_size;
     const int *b_right = dlx + 3 * dlx_size;
-    const int *b_col = dlx + 4 * dlx_size;
-    const int *b_row = dlx + 5 * dlx_size;
 
     int count = 0;
 
@@ -221,51 +312,34 @@ int permutate_tasks(const int *dlx, int dlx_size, int n, int *dlxs, int *answers
         // iterate each row
         int c_row;
         for (c_row = b_down[c_col]; c_row != c_col; c_row = b_down[c_row]) {
-            if (count > slots) {
+            if (count > tasks_size) {
                 fprintf(stderr, "slots not enough: tried to generate %d-th task but only %d slots available.\n",
-                        ++count, slots);
+                        ++count, tasks_size);
                 continue;
             }
 
-            memcpy(dlxs + count * dlx_size * 4, dlx, sizeof(int) * dlx_size * 4);
-            int *c_dlx = dlxs + count * dlx_size * 4;
-
-            const int *c_right = dlx + 3 * dlx_size;
-
-//            printf("[#%d] task: (%d, %d)\n", count, c_col, c_row);
-//            printf("[#%d] right[0]: %d\n", count, c_right[0]);
-
-            remove_column(c_col, c_dlx, dlx_size);
-            for (int elem = c_right[c_row]; elem != c_row; elem = c_right[elem]) {
-                remove_column(b_col[elem], c_dlx, dlx_size);
-            }
-
-            if (c_right[0] == 0) {
-                printf("Impossible solution: (%d, %d)", c_col, c_row);
-                // no more column, we have found a solution
-                return -1;
-            }
-
-            answers[count++] = b_row[c_row];
+            tasks[count++] = c_row;
         }
     }
-//    printf("Total count: %d\n", count);
     return count;
 }
 
 cl_event
-execute_exact_cover_kernel(cl_command_queue q, cl_kernel k, size_t task_count, size_t lws, cl_int n, cl_mem d_dlxs,
-                           cl_mem d_dlx_props, cl_int dlx_size, cl_mem d_ans, cl_mem d_ans_found, cl_event *waitingList,
-                           int waitingListSize) {
+execute_exact_cover_kernel(cl_command_queue q, cl_kernel k, size_t task_count, size_t lws, cl_int n, cl_mem d_tasks,
+                           cl_mem d_dlx, cl_mem d_dlxs, cl_mem d_dlx_props, cl_int dlx_size, cl_mem d_ans,
+                           cl_mem d_ans_found, cl_event *waitingList, int waitingListSize) {
     cl_int err;
     int i = 0;
     int N = n * n;
 
+//    global int *tasks, global int *_dlx
 //    global int *dlxs, global int *dlx_props,
 //    global int *answer, global int *answer_found,
 //    int dlx_size, int N, int task_count,
 //    local int *stacks
 
+    AddKernelArg(k, i++, sizeof(d_tasks), &d_tasks);
+    AddKernelArg(k, i++, sizeof(d_dlx), &d_dlx);
     AddKernelArg(k, i++, sizeof(d_dlxs), &d_dlxs);
     AddKernelArg(k, i++, sizeof(d_dlx_props), &d_dlx_props);
     AddKernelArg(k, i++, sizeof(d_ans), &d_ans);

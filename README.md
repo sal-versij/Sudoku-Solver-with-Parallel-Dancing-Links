@@ -16,5 +16,7 @@
 >
 > ```shell
 > cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_MAKE_PROGRAM=ninja -G Ninja -S .\ -B .\build
-> cmake --build .\build --target dlx -j 3
+> cmake --build .\build --target dancing_links -j 3
 > ```
+
+## Example
